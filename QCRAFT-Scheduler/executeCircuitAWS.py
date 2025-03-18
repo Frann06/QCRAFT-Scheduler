@@ -13,6 +13,11 @@ from typing import Optional
 import braket
 import numpy as np
 
+
+
+import boto3
+import json
+
 def code_to_circuit_aws(self, code_str:str) -> braket.circuits.circuit.Circuit: #Inverse parser to get the circuit object from the string
     """
     Transforms a string representation of a circuit into a Braket circuit.
@@ -214,3 +219,60 @@ def runAWS_save(machine:str, circuit:Circuit, shots:int, users:list, qubit_numbe
         task = device.run(circuit, s3_folder, shots=x)
         counts = task.result().measurement_counts
         return counts
+
+
+
+""""
+A partir de aqui todo lo mio
+"""
+
+def AWS():
+    regiones = ["us-west-1", "us-west-2", "us-east-1", "eu-north-1"]
+    dispositivos = []
+    
+    for region in regiones:
+        try:
+            client = boto3.client("braket", region_name=region)
+            response = client.search_devices(filters=[])
+            
+            if "devices" in response:
+                for device in response["devices"]:
+                    device_arn = device.get("deviceArn", "N/A")
+                    device_details = client.get_device(deviceArn=device_arn)
+                    device_status = device_details.get("deviceStatus", "N/A")
+
+                    if device_status == "RETIRED" or device_status == "OFFLINE":
+                        continue  # Saltar dispositivos retirados
+
+                    capabilities = json.loads(device_details.get("deviceCapabilities", "{}"))
+                    paradigm = capabilities.get("paradigm", {})
+
+                    if "nativeGateSet" in paradigm:
+                        qubit_count = paradigm.get("qubitCount", "N/A")
+
+                        # Obtener el tamaño de la cola de tareas cuánticas
+                        queue_info = device_details.get("deviceQueueInfo", [])
+                        queue_size = min(
+                            [int(q.get("queueSize", float("inf"))) for q in queue_info],
+                            default=float("inf")
+                        )
+
+                        device_info = {
+                            "region": region,
+                            "deviceArn": device_arn,
+                            "deviceName": device.get("deviceName", "N/A"),
+                            "queueSize": queue_size if queue_size != float("inf") else 0,
+                            "deviceStatus": device_status,
+                            "deviceType": device.get("deviceType", "N/A"),
+                            "providerName": device.get("providerName", "N/A"),
+                            "qubitCount": qubit_count,
+                        }
+
+                        dispositivos.append(device_info)
+        
+        except Exception as e:
+            print(json.dumps({"error": str(e), "region": region}))
+
+    # ✅ Imprimir y devolver la lista de dispositivos
+    #print(json.dumps(dispositivos, indent=4))
+    return dispositivos  # ✅ Devuelve la lista para su uso posterior

@@ -3,10 +3,18 @@ import requests
 from flask import request
 import re
 from executeCircuitIBM import executeCircuitIBM
-from executeCircuitAWS import runAWS, runAWS_save, code_to_circuit_aws
+from executeCircuitAWS import runAWS, runAWS_save, code_to_circuit_aws, AWS 
 from ResettableTimer import ResettableTimer
 from threading import Thread
 from typing import Callable
+
+
+
+from collections import deque
+import subprocess
+
+import sys
+
 
 class Policy:
     """
@@ -70,7 +78,7 @@ class SchedulerPolicies:
             unscheduler (str): The URL of the unscheduler
         """
         self.app = app
-        self.time_limit_seconds = 15*60
+        self.time_limit_seconds = 60
         self.max_qubits = 127
         self.machine_ibm = 'ibm_brisbane' # TODO maybe add machine as a parameter to the policy instead so it can be changed on each execution or just get the best machine just before the execution
         self.machine_aws = 'local'
@@ -80,7 +88,9 @@ class SchedulerPolicies:
                         'shots': Policy(self.send_shots, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
                         'depth': Policy(self.send_depth, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
                         'shots_depth': Policy(self.send_shots_depth, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
-                        'shots_optimized': Policy(self.send_shots_optimized, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm)}
+                        'shots_optimized': Policy(self.send_shots_optimized, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
+                        'fran' : Policy(self.main, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm)}
+        
         
         self.translator = f"http://{self.app.config['TRANSLATOR']}:{self.app.config['TRANSLATOR_PORT']}/code/"
         self.unscheduler = f"http://{self.app.config['HOST']}:{self.app.config['PORT']}/unscheduler"
@@ -115,12 +125,13 @@ class SchedulerPolicies:
         circuit_name = request.json['circuit_name']
         maxDepth = request.json['maxDepth']
         provider = request.json['provider']
-        data = (circuit, num_qubits, shots, user, circuit_name, maxDepth)
+        criterio = request.json['criterio']
+        data = (circuit, num_qubits, shots, user, circuit_name, maxDepth,criterio)
         self.services[service_name].queues[provider].append(data)
         if not self.services[service_name].timers[provider].is_alive():
             self.services[service_name].timers[provider].start()
         n_qubits = sum(item[1] for item in self.services[service_name].queues[provider])
-        if abs(n_qubits - self.max_qubits) <= 5 or n_qubits >= self.max_qubits:
+        if n_qubits >= self.max_qubits and service_name != 'fran':
             self.services[service_name].timers[provider].execute_and_reset()
         return 'Data received', 200
         
@@ -465,6 +476,245 @@ class SchedulerPolicies:
             Thread(target=executeCircuit, args=(json.dumps(data),qb,shotsUsr,provider,urls,machine)).start()
             #executeCircuit(json.dumps(data),qb,shotsUsr,provider,urls)
             self.services['time'].timers[provider].reset()
+
+
+
+
+
+    def obtener_dispositivos_ibm(self):
+        """Obtiene la lista de dispositivos de IBM Quantum."""
+        try:
+            # Crear una instancia de la clase IBM
+            dispositivos = self.executeCircuitIBM.IBM()  # ✅ Ahora IBM() devuelve dispositivos
+            
+            # Debugging
+            #print(" Dispositivos obtenidos de IBM:", dispositivos)
+
+            return dispositivos  # ✅ Devolver la lista correctamente
+
+        except Exception as e:
+            print(f"Error al obtener dispositivos de IBM: {e}")
+            return []
+
+    
+
+    def obtener_dispositivos_aws(self):
+        """Obtiene la lista de dispositivos de AWS."""
+        try:
+            # Crear una instancia de la clase AWS
+            dispositivos = AWS()  # ✅ Ahora AWS() devuelve la lista correctamente
+
+            # Debugging
+            #print("📡 Dispositivos obtenidos de AWS:", dispositivos)
+
+            return dispositivos  # ✅ Devolver la lista de dispositivos correctamente
+
+        except Exception as e:
+            print(f"Error al obtener dispositivos de AWS: {e}")
+            return []
+
+    def organizar_colas_por_criterio(self, queue):
+        colas_por_criterio = {
+            1: [item for item in queue if item[6] == 1],
+            2: [item for item in queue if item[6] == 2],
+            3: [item for item in queue if item[6] == 3],
+        }
+
+        for criterio, cola in colas_por_criterio.items():
+            max_numero = max([item[1] for item in cola], default=0)  # Obtener el número máximo
+            print(f"\n📌 Cola para el criterio {criterio}:")
+            for item in cola:
+                print(f"  🔹 ID: {item[3]} | Número: {item[1]} | Criterio: {item[6]}")
+            print(f"🔹 Número de elementos en la cola del criterio {criterio}: {len(cola)}")
+            print(f"🔹 El número máximo en esta cola es: {max_numero}")
+        
+        return colas_por_criterio
+        
+    def obtener_mejor_maquina(self, capacidad_maxima, criterio):
+        dispositivos_ibm = self.obtener_dispositivos_ibm()
+        dispositivos_aws = self.obtener_dispositivos_aws()
+        dispositivos = dispositivos_ibm + dispositivos_aws
+        
+        if not dispositivos:
+            print("No se encontraron dispositivos disponibles.")
+            return None
+
+        dispositivos_online = [d for d in dispositivos if d.get("deviceStatus") == "ONLINE"]
+        if not dispositivos_online:
+            print("\n⚠ No hay máquinas en línea disponibles.")
+            return None
+        
+        max_qubit_maquinas = max(d["qubitCount"] for d in dispositivos_online)
+        print(f"\n🔹 La máxima capacidad de las máquinas es: {max_qubit_maquinas}")
+        
+        # Filtrar máquinas con qubitCount mayor al máximo número en la cola
+        maquinas_validas = [d for d in dispositivos_online if d["qubitCount"] > capacidad_maxima]
+        
+        
+        if not maquinas_validas:
+            print("⚠ No hay máquinas con suficiente capacidad.")
+            return None
+        
+        if capacidad_maxima == max_qubit_maquinas:
+            maquinas_validas = [d for d in dispositivos_online if d["qubitCount"] == max_qubit_maquinas]
+
+        if criterio == 1:
+            mejor_maquina = min(maquinas_validas, key=lambda d: (d["queueSize"], -d["qubitCount"]))
+        elif criterio == 2:
+            mejor_maquina = max(maquinas_validas, key=lambda d: (d["qubitCount"], -d["queueSize"]))
+        elif criterio == 3:
+            peso_capacidad = 50
+            peso_cola = 50
+            min_qubits = min(d["qubitCount"] for d in maquinas_validas)
+            max_qubits = max(d["qubitCount"] for d in maquinas_validas)
+            min_queue = min(d["queueSize"] for d in maquinas_validas)
+            max_queue = max(d["queueSize"] for d in maquinas_validas)
+            
+            def normalizar(valor, minimo, maximo):
+                return (valor - minimo) / (maximo - minimo) if maximo > minimo else 1
+            
+            def calcular_puntuacion(dispositivo):
+                score_qubits = normalizar(dispositivo["qubitCount"], min_qubits, max_qubits)
+                score_queue = 1 - normalizar(dispositivo["queueSize"], min_queue, max_queue)
+                return (peso_capacidad / 100 * score_qubits) + (peso_cola / 100 * score_queue)
+            
+            ranking = sorted(maquinas_validas, key=calcular_puntuacion, reverse=True)
+            mejor_maquina = ranking[0]
+        else:
+            print("⚠ Criterio no válido.")
+            return None
+         # 🚨 Verificación adicional: si la máquina seleccionada está caída, salir del programa
+        if mejor_maquina.get("deviceStatus") not in ["ONLINE"]:
+            print(f"\n⛔ ERROR: La máquina seleccionada ({mejor_maquina['deviceName']}) está caída. Finalizando el programa.")
+            sys.exit(1)
+        
+        print(f"\n🏆 Máquina seleccionada para el criterio {criterio}: {mejor_maquina['deviceName']} ({mejor_maquina['providerName']})")
+        return mejor_maquina
+
+    
+    
+    def programaDinamico(self, queue: list, max_qubits: int, criterio: int):
+        """
+        Encuentra la mejor combinación de elementos sin superar max_qubits.
+        También selecciona la mejor máquina antes de optimizar.
+        """
+        # Seleccionar la mejor máquina según max_qubits y el criterio
+        # mejor_maquina = self.obtener_mejor_maquina(max_qubits, criterio)
+        # if not mejor_maquina:
+        #     print("⚠ No se puede continuar sin una máquina adecuada.")
+        #     return None, None
+
+        # # Ajustar max_qubits al `qubitCount` de la mejor máquina
+        # max_qubits = mejor_maquina["qubitCount"]
+        # print(f"\n🔹 Optimizando para capacidad máxima de la máquina: {max_qubits}")
+
+        # Programación dinámica para encontrar la mejor combinación
+        n = len(queue)
+        dp = [0] * (max_qubits + 1)  # Almacena la suma máxima de valores para cada capacidad
+        seleccionados = [[] for _ in range(max_qubits + 1)]  # Almacena las tareas seleccionadas para cada capacidad
+
+        for i in range(n):
+            id_, valor = queue[i][0], queue[i][1]  # Tomar solo el identificador y el valor de la tarea
+            for w in range(max_qubits, valor - 1, -1):
+                if dp[w - valor] + valor > dp[w]:
+                    dp[w] = dp[w - valor] + valor
+                    seleccionados[w] = seleccionados[w - valor] + [queue[i]]
+
+        # Devolver la mejor combinación y la suma total
+        return seleccionados[max_qubits], dp[max_qubits]
+
+
+    def main(self, queue=None, capacidad_maxima=None, provider=None, executeCircuit=None, machine=None):
+        """
+        Ejecuta el proceso completo. Si no se proporcionan queue y capacidad_maxima, usa los valores predeterminados.
+        """
+        if not queue:
+            print("\n✅ No hay más elementos en la cola. Programa finalizado.\n")
+            return
+        
+        print("\n🚀 Iniciando el programa...")
+
+        # Si no hay más elementos en la cola, termina el programa
+        
+
+        # Calcular capacidad máxima
+        #capacidad_maxima = max(x[1] for x in queue)
+        #print(f"\n🔹 Capacidad máxima de la cola: {capacidad_maxima}")
+
+        # Mostrar todas las máquinas disponibles
+        print("\n📌 Máquinas disponibles:")
+        dispositivos_ibm = self.obtener_dispositivos_ibm()
+        dispositivos_aws = self.obtener_dispositivos_aws()
+        dispositivos = dispositivos_ibm + dispositivos_aws
+        for dispositivo in dispositivos:
+            print(f"  🔹 {dispositivo['deviceName']} ({dispositivo['providerName']}) - Qubits: {dispositivo['qubitCount']} - Cola: {dispositivo['queueSize']}")
+
+        # Organizar las colas en un diccionario por criterio
+        print("\n Para el criterio 1 se va a priorizar la máquina con menor número de qubits en cola y, a igual número de qubits, mayor capacidad.")
+        print(" Para el criterio 2 se va a priorizar la máquina con mayor capacidad y, a igual capacidad, menor número en la cola.")
+        print(" Para el criterio 3 se va a priorizar la máquina con un balance entre capacidad y tamaño de la cola (50%-50%).")
+        
+        colas_por_criterio = self.organizar_colas_por_criterio(queue)
+
+        # Procesar cada criterio
+        for criterio, cola in colas_por_criterio.items():
+            if not cola:
+                print(f"\n⚠ No hay elementos en la cola del criterio {criterio}.")
+                continue
+
+
+            capacidad_maxima = max(item[1] for item in cola)
+            # Seleccionar la mejor máquina según el criterio
+            mejor_maquina = self.obtener_mejor_maquina(capacidad_maxima, criterio)
+            if not mejor_maquina:
+                print(f"⚠ No se puede continuar sin una máquina adecuada para el criterio {criterio}.")
+                continue
+
+            # Ajustar max_qubits al `qubitCount` de la mejor máquina
+            max_qubits = mejor_maquina["qubitCount"]
+            print(f"\n🔹 Optimizando para capacidad máxima de la máquina: {max_qubits}")
+
+            # Ejecutar el algoritmo de programación dinámica con la mejor máquina
+            combinacion, suma = self.programaDinamico(cola, max_qubits, criterio)
+
+            if combinacion:
+                print(f"\n✅ Combinación encontrada para el criterio {criterio}:")
+                for item in combinacion:
+                    print(f"  🔹 ID: {item[3]} | Número: {item[1]} | Criterio: {item[6]}")
+                print(f"\n🎯 Suma total: {suma}")
+
+                # Eliminar los elementos usados de la cola
+                for item in combinacion:
+                    queue.remove(item)
+                    cola.remove(item)
+
+                # Mostrar los elementos restantes en la cola del criterio actual
+                print(f"\n📌 Elementos restantes en la cola del criterio {criterio}:")
+                for item in cola:
+                    print(f"  🔹 ID: {item[3]} | Número: {item[1]} | Criterio: {item[6]}")
+                print(f"🔹 Número de elementos restantes en la cola del criterio {criterio}: {len(cola)}")
+            else:
+                print(f"⚠ No se encontraron combinaciones válidas para el criterio {criterio}.")
+
+        # Mostrar los elementos restantes en todas las colas
+        # print("\n📌 Elementos restantes en todas las colas:")
+        # for criterio, cola in colas_por_criterio.items():
+        #     print(f"\n📌 Cola para el criterio {criterio}:")
+        #     for item in cola:
+        #         print(f"  🔹 ID: {item[3]} | Número: {item[1]} | Criterio: {item[6]}")
+        #     print(f"🔹 Número de elementos restantes en la cola del criterio {criterio}: {len(cola)}")
+
+
+
+       
+        
+
+
+
+
+
+
+    
 
     def get_ibm_machine(self) -> str:
         """

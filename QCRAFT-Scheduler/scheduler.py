@@ -54,10 +54,10 @@ class Scheduler:
         
         self.max_qubits = 127
         
-        mongo_uri = f"mongodb://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{self.app.config['DB']}:{self.app.config['DB_PORT']}/"
-        self.client = MongoClient(mongo_uri)
-        self.db = self.client[os.getenv('DB_NAME')]
-        self.collection = self.db[os.getenv('DB_COLLECTION')]
+        #mongo_uri = f"mongodb://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{self.app.config['DB']}:{self.app.config['DB_PORT']}/"
+        #self.client = MongoClient(mongo_uri)
+        #self.db = self.client[os.getenv('DB_NAME')]
+        #self.collection = self.db[os.getenv('DB_COLLECTION')]
 
         self.translator = f"http://{self.app.config['TRANSLATOR']}:{self.app.config['TRANSLATOR_PORT']}/code/"
         self.policy_service = f"http://{self.app.config['HOST']}:{self.app.config['PORT']}/service/"
@@ -157,7 +157,7 @@ class Scheduler:
         #        if list(line_dict.keys())[0] not in ids:
         #            file.write(line)        
 
-    def select_policy(self, url:str, num_qubits:int, shots:int, user:int, circuit_name:str, maxDepth:int, provider:str, policy:str) -> None:
+    def select_policy(self, url:str, num_qubits:int, shots:int, user:int, circuit_name:str, maxDepth:int, provider:str, policy:str, criterio:str) -> None:
         """
         Select the policy to execute the circuit and send a post request to the policy service
 
@@ -171,7 +171,7 @@ class Scheduler:
             provider (str): The provider to execute the circuit            
             policy (str): The policy to execute the circuit
         """
-        data = {"circuit": url, "num_qubits": num_qubits, "shots": shots, "user": user, "circuit_name": circuit_name, "maxDepth": maxDepth, "provider": provider}
+        data = {"circuit": url, "num_qubits": num_qubits, "shots": shots, "user": user, "circuit_name": circuit_name, "maxDepth": maxDepth, "provider": provider, "criterio": criterio}
         requests.post(self.policy_service+policy, json=data)
         
 
@@ -276,7 +276,7 @@ class Scheduler:
             '_id': str(user),
             'circuit': url
         }
-        self.collection.insert_one(document)
+        #self.collection.insert_one(document)
 
         # Parse the URL and extract the fragment
         try:
@@ -366,6 +366,7 @@ class Scheduler:
             policy = request.json['policy']
         url = request.json['url']
         shots = request.json['shots']
+        criterio = request.json['criterio']
 
         if not isinstance(shots, int) or shots <= 0 or shots > 20000:
             return "Invalid shots value", 400
@@ -376,8 +377,8 @@ class Scheduler:
         '_id': str(user),
         'circuit': url
         }
-        with self.result_lock:
-            self.collection.insert_one(document)
+        #with self.result_lock:
+        #    self.collection.insert_one(document)
 
         # URL is a raw GitHub url, get its content
         try:
@@ -490,7 +491,7 @@ class Scheduler:
             num_qubits = len(qubits.values())
             provider = 'aws'
 
-        self.select_policy(circuit, num_qubits, shots, user, circuit_name, maxDepth, provider, policy)
+        self.select_policy(circuit, num_qubits, shots, user, circuit_name, maxDepth, provider, policy, criterio)
 
         return str(user), 200
 
