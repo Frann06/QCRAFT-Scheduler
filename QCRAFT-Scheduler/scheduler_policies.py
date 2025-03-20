@@ -79,10 +79,12 @@ class SchedulerPolicies:
         """
         self.app = app
         self.time_limit_seconds = 60
+        self.executeCircuitIBM = executeCircuitIBM()
         self.max_qubits = 127
+        self.setMaxQubits()
         self.machine_ibm = 'ibm_brisbane' # TODO maybe add machine as a parameter to the policy instead so it can be changed on each execution or just get the best machine just before the execution
         self.machine_aws = 'local'
-        self.executeCircuitIBM = executeCircuitIBM()
+        
 
         self.services = {'time': Policy(self.send, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
                         'shots': Policy(self.send_shots, self.max_qubits, self.time_limit_seconds, self.executeCircuit, self.machine_aws, self.machine_ibm),
@@ -95,6 +97,38 @@ class SchedulerPolicies:
         self.translator = f"http://{self.app.config['TRANSLATOR']}:{self.app.config['TRANSLATOR_PORT']}/code/"
         self.unscheduler = f"http://{self.app.config['HOST']}:{self.app.config['PORT']}/unscheduler"
         self.app.route('/service/<service_name>', methods=['POST'])(self.service)
+
+    # def getMaxQubits(self):
+    #     return self.max_qubits
+        
+    # def setMaxQubits(self):
+    #     """
+    #     Sets the maximum number of qubits for the scheduler based on the available devices
+    #     """
+    #     dispositivos_ibm = self.obtener_dispositivos_ibm()
+    #     dispositivos_aws = self.obtener_dispositivos_aws()
+    #     dispositivos = dispositivos_ibm + dispositivos_aws
+        
+    #     if not dispositivos:
+    #         print("No se encontraron dispositivos disponibles.")
+    #         return None
+        
+
+    #     dispositivos_online = [d for d in dispositivos if d.get("deviceStatus") == "ONLINE"]
+    #     if not dispositivos_online:
+    #         print("\n⚠ No hay máquinas en línea disponibles.")
+    #         return None
+        
+    #     for dispositivo in dispositivos_online:
+    #         print(f"  🔹 {dispositivo['deviceName']} ({dispositivo['providerName']}) - Qubits: {dispositivo['qubitCount']} - Cola: {dispositivo['queueSize']}")
+        
+    #     max_qubit_maquinas = max(d["qubitCount"] for d in dispositivos_online)
+    #     #print(f"\n🔹 La máxima capacidad de las máquinas es: {max_qubit_maquinas}")
+
+    #     print(f"Max qubits EL METODO ESTE QUE HE CREADO: {max_qubit_maquinas}")
+       
+    #     self.max_qubit = max_qubit_maquinas
+
         
 
     def service(self, service_name:str) -> tuple:
@@ -480,6 +514,39 @@ class SchedulerPolicies:
 
 
 
+    def getMaxQubits(self):
+        return self.max_qubits
+        
+    def setMaxQubits(self):
+        """
+        Sets the maximum number of qubits for the scheduler based on the available devices
+        """
+        dispositivos_ibm = self.obtener_dispositivos_ibm()
+        dispositivos_aws = self.obtener_dispositivos_aws()
+        dispositivos = dispositivos_ibm + dispositivos_aws
+        
+        if not dispositivos:
+            print("No se encontraron dispositivos disponibles.")
+            return None
+        
+
+        dispositivos_online = [d for d in dispositivos if d.get("deviceStatus") == "ONLINE"]
+        if not dispositivos_online:
+            print("\n⚠ No hay máquinas en línea disponibles.")
+            return None
+        self.dispositivos_disponibles = dispositivos_online
+        for dispositivo in dispositivos_online:
+            print(f"  🔹 {dispositivo['deviceName']} ({dispositivo['providerName']}) - Qubits: {dispositivo['qubitCount']} - Cola: {dispositivo['queueSize']}")
+        
+        max_qubit_maquinas = max(d["qubitCount"] for d in dispositivos_online)
+        #print(f"\n🔹 La máxima capacidad de las máquinas es: {max_qubit_maquinas}")
+
+        print(f"Max qubits EL METODO ESTE QUE HE CREADO: {max_qubit_maquinas}")
+       
+        self.max_qubit = max_qubit_maquinas
+
+
+
 
     def obtener_dispositivos_ibm(self):
         """Obtiene la lista de dispositivos de IBM Quantum."""
@@ -531,19 +598,23 @@ class SchedulerPolicies:
         return colas_por_criterio
         
     def obtener_mejor_maquina(self, capacidad_maxima, criterio):
-        dispositivos_ibm = self.obtener_dispositivos_ibm()
-        dispositivos_aws = self.obtener_dispositivos_aws()
-        dispositivos = dispositivos_ibm + dispositivos_aws
+        # dispositivos_ibm = self.obtener_dispositivos_ibm()
+        # dispositivos_aws = self.obtener_dispositivos_aws()
+        # dispositivos = dispositivos_ibm + dispositivos_aws
         
-        if not dispositivos:
-            print("No se encontraron dispositivos disponibles.")
-            return None
+        # if not dispositivos:
+        #     print("No se encontraron dispositivos disponibles.")
+        #     return None
 
-        dispositivos_online = [d for d in dispositivos if d.get("deviceStatus") == "ONLINE"]
-        if not dispositivos_online:
-            print("\n⚠ No hay máquinas en línea disponibles.")
-            return None
+        # dispositivos_online = [d for d in dispositivos if d.get("deviceStatus") == "ONLINE"]
+        # if not dispositivos_online:
+        #     print("\n⚠ No hay máquinas en línea disponibles.")
+        #     return None
         
+        # max_qubit_maquinas = max(d["qubitCount"] for d in dispositivos_online)
+        # print(f"\n🔹 La máxima capacidad de las máquinas es: {max_qubit_maquinas}")
+
+        dispositivos_online = self.dispositivos_disponibles
         max_qubit_maquinas = max(d["qubitCount"] for d in dispositivos_online)
         print(f"\n🔹 La máxima capacidad de las máquinas es: {max_qubit_maquinas}")
         
@@ -583,10 +654,8 @@ class SchedulerPolicies:
         else:
             print("⚠ Criterio no válido.")
             return None
-         # 🚨 Verificación adicional: si la máquina seleccionada está caída, salir del programa
-        if mejor_maquina.get("deviceStatus") not in ["ONLINE"]:
-            print(f"\n⛔ ERROR: La máquina seleccionada ({mejor_maquina['deviceName']}) está caída. Finalizando el programa.")
-            sys.exit(1)
+        
+        
         
         print(f"\n🏆 Máquina seleccionada para el criterio {criterio}: {mejor_maquina['deviceName']} ({mejor_maquina['providerName']})")
         return mejor_maquina
@@ -643,11 +712,13 @@ class SchedulerPolicies:
 
         # Mostrar todas las máquinas disponibles
         print("\n📌 Máquinas disponibles:")
-        dispositivos_ibm = self.obtener_dispositivos_ibm()
-        dispositivos_aws = self.obtener_dispositivos_aws()
-        dispositivos = dispositivos_ibm + dispositivos_aws
-        for dispositivo in dispositivos:
-            print(f"  🔹 {dispositivo['deviceName']} ({dispositivo['providerName']}) - Qubits: {dispositivo['qubitCount']} - Cola: {dispositivo['queueSize']}")
+        # dispositivos_ibm = self.obtener_dispositivos_ibm()
+        # dispositivos_aws = self.obtener_dispositivos_aws()
+        # dispositivos = dispositivos_ibm + dispositivos_aws
+        # for dispositivo in dispositivos:
+        #     print(f"  🔹 {dispositivo['deviceName']} ({dispositivo['providerName']}) - Qubits: {dispositivo['qubitCount']} - Cola: {dispositivo['queueSize']}")
+        
+        self.setMaxQubits()
 
         # Organizar las colas en un diccionario por criterio
         print("\n Para el criterio 1 se va a priorizar la máquina con menor número de qubits en cola y, a igual número de qubits, mayor capacidad.")

@@ -52,7 +52,7 @@ class Scheduler:
         self.app.config['DB'] = os.getenv('DB')
         self.app.config['DB_PORT'] = os.getenv('DB_PORT')
         
-        self.max_qubits = 127
+        
         
         #mongo_uri = f"mongodb://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{self.app.config['DB']}:{self.app.config['DB_PORT']}/"
         #self.client = MongoClient(mongo_uri)
@@ -63,6 +63,7 @@ class Scheduler:
         self.policy_service = f"http://{self.app.config['HOST']}:{self.app.config['PORT']}/service/"
 
         self.scheduler_policies = SchedulerPolicies(self.app)
+        #self.max_qubits = 127
 
         self.executeCircuitIBM = self.scheduler_policies.get_ibm()
 
@@ -314,7 +315,7 @@ class Scheduler:
                         shots = awsShots
                     providers['aws'] = shots
             
-            if num_qubits > self.max_qubits:
+            if num_qubits > self.scheduler_policies.getMaxQubits():
                 return "Circuit too large", 400  # Return a response
 
             for provider in providers: #Iterate through the providers to add the elements to the specific provider queue in case the circuit needs to be executed on multiple providers
@@ -405,7 +406,7 @@ class Scheduler:
             num_qubits_line = next((line.split('#')[0].strip() for line in lines if '= QuantumRegister(' in line.split('#')[0]), None)
             num_qubits = int(num_qubits_line.split('QuantumRegister(')[1].split(',')[0].strip(')')) if num_qubits_line else None
 
-            if num_qubits > self.max_qubits:
+            if num_qubits > self.scheduler_policies.getMaxQubits():
                 return "Circuit too large", 400
 
             # Get the data before the = in the line that appears QuantumCircuit(...)
